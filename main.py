@@ -8,12 +8,18 @@ app = Flask(__name__)
 BOT_TOKEN = "8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c"
 CHAT_ID = "-1004349956233"
 
-# Endpoint-ul direct de mobil (bypass Cloudflare web)
-WAZE_URL = (
-    "https://www.waze.com/row-rtserver/web/TGeoRSS"
-    "?top=53.45&bottom=53.20&left=-6.45&right=-6.05"
-    "&env=row&types=alerts"
-)
+# Endpoint-ul oficial GeoRSS al Waze LiveMap
+WAZE_URL = "https://www.waze.com/live-map/api/georss"
+
+# Parametrii exacti pe care îi trimite harta oficială Waze Web pentru Dublin
+PARAMS = {
+    "top": "53.45",
+    "bottom": "53.20",
+    "left": "-6.45",
+    "right": "-6.05",
+    "env": "row",
+    "types": "alerts"
+}
 
 seen_incidents = set()
 
@@ -31,31 +37,35 @@ def send_telegram_alert(text):
         print(f"[Telegram Error]: {e}", flush=True)
 
 def check_waze():
-    print("[WAZE JOB] Querying Waze Mobile Endpoint...", flush=True)
+    print("[WAZE JOB] Fetching Waze data...", flush=True)
 
-    # Identitate simulată de aplicație mobilă Android
+    # Identitate completă de browser desktop pentru a evita blocajele Cloudflare
     headers = {
-        "User-Agent": "Waze/4.90.0.0 (Android; Mobile)",
-        "Accept": "application/json",
-        "Connection": "keep-alive"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.waze.com/live-map/",
+        "Origin": "https://www.waze.com",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
     }
 
     try:
-        response = requests.get(WAZE_URL, headers=headers, timeout=10)
+        response = requests.get(WAZE_URL, params=PARAMS, headers=headers, timeout=10)
 
         if response.status_code != 200:
-            print(f"[WAZE JOB] HTTP Error {response.status_code}", flush=True)
+            print(f"[WAZE JOB] Status Error: HTTP {response.status_code}", flush=True)
             return
 
-        # Verificăm dacă răspunsul este într-adevăr JSON
         try:
             data = response.json()
         except Exception:
-            print("[WAZE JOB] Response was not JSON (blocked by Cloudflare/Waze).", flush=True)
+            print("[WAZE JOB] Response was not JSON (blocked by Cloudflare).", flush=True)
             return
 
         alerts = data.get("alerts", [])
-        print(f"[WAZE JOB] SUCCESS! Received {len(alerts)} alerts from Dublin.", flush=True)
+        print(f"[WAZE JOB] SUCCESS! Found {len(alerts)} alerts in Dublin area.", flush=True)
 
         for alert in alerts:
             uuid = alert.get("uuid") or alert.get("id")
