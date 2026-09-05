@@ -151,16 +151,17 @@ def build_accident_message(alert: dict[str, Any]) -> str:
 def check_waze() -> None:
     print("[WAZE JOB] Se preiau alertele...", flush=True)
 
-    # ScrapingAnt v2 cere cheia în parametrul x-api-key. Parametrul vechi
-    # api_key, împreună cu browser_scanner, poate provoca HTTP 422.
-    params = {"url": WAZE_URL}
-    headers = {"x-api-key": SCRAPINGANT_API_KEY}
+    # ScrapingAnt v2 cere cheia sub numele x-api-key. Conform exemplului
+    # oficial, x-api-key și url sunt parametri de query string.
+    params = {
+        "url": WAZE_URL,
+        "x-api-key": SCRAPINGANT_API_KEY,
+    }
 
     try:
         response = requests.get(
             SCRAPINGANT_ENDPOINT,
             params=params,
-            headers=headers,
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
 
