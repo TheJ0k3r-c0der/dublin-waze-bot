@@ -1,6 +1,9 @@
+import html
 import json
 import os
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -9,17 +12,21 @@ from flask import Flask
 app = Flask(__name__)
 
 
+# -----------------------------------------------------------------------------
+# Configurare
+# -----------------------------------------------------------------------------
+
 def required_env(name: str) -> str:
-    """Returnează o variabilă obligatorie sau oprește aplicația cu un mesaj clar."""
+    """Returnează o variabilă de mediu obligatorie."""
     value = os.getenv(name, "").strip()
     if not value:
         raise RuntimeError(f"Variabila de mediu obligatorie lipsește: {name}")
     return value
 
 
-BOT_TOKEN = required_env("8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c")
-CHAT_ID = required_env("-1004349956233")
-SCRAPINGANT_API_KEY = required_env("3a79ecac33a64c3aab256e9bf39656c1")
+BOT_TOKEN = required_env("BOT_TOKEN")
+CHAT_ID = required_env("CHAT_ID")
+SCRAPINGANT_API_KEY = required_env("SCRAPINGANT_API_KEY")
 
 WAZE_URL = os.getenv(
     "WAZE_URL",
@@ -27,32 +34,110 @@ WAZE_URL = os.getenv(
 ).strip()
 
 POLL_INTERVAL_MINUTES = int(os.getenv("POLL_INTERVAL_MINUTES", "3"))
-REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
+REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "60"))
 TELEGRAM_TIMEOUT_SECONDS = int(os.getenv("TELEGRAM_TIMEOUT_SECONDS", "10"))
 
 SCRAPINGANT_ENDPOINT = "https://api.scrapingant.com/v2/general"
-
-# Doar tipul ACCIDENT este acceptat. Nu folosim subtype pentru a transforma
-# alte alerte, precum HAZARD sau JAM, în accidente.
 ACCIDENT_TYPE = "ACCIDENT"
+DUBLIN_TIMEZONE = ZoneInfo("Europe/Dublin")
 
-# Păstrat în memorie pentru compatibilitate cu versiunea inițială.
-# Pentru deduplicare persistentă după restart, folosește o bază de date.
+# Deduplicare în memorie. Pentru deduplicare după restart este necesară o bază
+# de date persistentă, de exemplu SQLite.
 seen_incidents: set[str] = set()
 
 
+# -----------------------------------------------------------------------------
+# Utilitare
+# -----------------------------------------------------------------------------
+
 def normalize_type(value: Any) -> str:
-    """Normalizează tipul primit de la Waze pentru comparația strictă."""
+    """Normalizează tipul incidentului pentru comparație exactă."""
     return str(value or "").strip().upper().replace("-", "_").replace(" ", "_")
 
 
+def escape_html(value: Any) -> str:
+    """Protejează valorile introduse într-un mesaj Telegram cu parse_mode HTML."""
+    return html.escape(str(value if value is not None else ""), quote=True)
+
+
+def format_report_time(alert: dict[str, Any]) -> str:
+    """Returnează ora incidentului în fusul Europe/Dublin.
+
+    Waze poate folosi timestamp Unix în secunde sau milisecunde. Sunt încercate
+    mai multe nume de câmp întâlnite în răspunsurile endpointului.
+    """
+    timestamp = (
+        alert.get("pubMillis")
+        or alert.get("pubMillisUTC")
+        or alert.get("reportedAt")
+        or alert.get("created")
+        or alert.get("time")
+    )
+
+    if timestamp is None or timestamp == "":
+        return "ora necunoscută"
+
+    try:
+        numeric_timestamp = float(timestamp)
+
+        # Timestampurile mai mari sunt, de obicei, exprimate în milisecunde.
+        if numeric_timestamp > 10_000_000_000:
+            numeric_timestamp /= 1000
+
+        return datetime.fromtimestamp(
+            numeric_timestamp,
+            tz=DUBLIN_TIMEZONE,
+        ).strftime("%H:%M:%S")
+    except (TypeError, ValueError, OSError, OverflowError):
+        return "ora necunoscută"
+
+
+def extract_waze_payload(raw_response: str) -> dict[str, Any]:
+    """Extrage payloadul JSON Waze din răspunsul ScrapingAnt."""
+    try:
+        parsed_response = json.loads(raw_response)
+    except json.JSONDecodeError:
+        return {}
+
+    if not isinstance(parsed_response, dict):
+        return {}
+
+    # Unele răspunsuri pot împacheta conținutul în câmpul content.
+    raw_content = parsed_response.get("content")
+
+    if isinstance(raw_content, dict):
+        return raw_content
+
+    if isinstance(raw_content, str) and raw_content.strip():
+        try:
+            parsed_content = json.loads(raw_content)
+            if isinstance(parsed_content, dict):
+                return parsed_content
+        except json.JSONDecodeError:
+            pass
+
+    # În cazul răspunsului JSON direct, obiectul conține câmpul alerts.
+    return parsed_response
+
+
+def get_alerts(waze_data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Returnează lista de alerte, dacă răspunsul are forma așteptată."""
+    alerts = waze_data.get("alerts", [])
+    if not isinstance(alerts, list):
+        return []
+    return [alert for alert in alerts if isinstance(alert, dict)]
+
+
+# -----------------------------------------------------------------------------
+# Telegram
+# -----------------------------------------------------------------------------
+
 def send_telegram_alert(text: str) -> bool:
-    """Trimite un mesaj Telegram și raportează explicit succesul sau eroarea."""
+    """Trimite mesajul în canal și verifică răspunsul Telegram."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
         "text": text,
-        # HTML evită multe probleme cauzate de caractere speciale din numele drumurilor.
         "parse_mode": "HTML",
         "disable_web_page_preview": False,
     }
@@ -63,9 +148,16 @@ def send_telegram_alert(text: str) -> bool:
             json=payload,
             timeout=TELEGRAM_TIMEOUT_SECONDS,
         )
-        response.raise_for_status()
-        result = response.json()
 
+        if response.status_code != 200:
+            print(
+                f"[Telegram Error] HTTP {response.status_code}: "
+                f"{response.text[:500]}",
+                flush=True,
+            )
+            return False
+
+        result = response.json()
         if not result.get("ok"):
             print(f"[Telegram Error] API response: {result}", flush=True)
             return False
@@ -75,98 +167,92 @@ def send_telegram_alert(text: str) -> bool:
         print(f"[Telegram Error] {exc}", flush=True)
         return False
     except ValueError as exc:
-        print(f"[Telegram Error] Răspuns JSON invalid: {exc}", flush=True)
+        print(f"[Telegram Error] Răspuns Telegram invalid: {exc}", flush=True)
         return False
 
 
-def escape_html(value: Any) -> str:
-    """Escape minimal pentru textul introdus într-un mesaj Telegram HTML."""
-    text = str(value or "")
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
-
-
-def extract_waze_payload(raw_response: str) -> dict[str, Any]:
-    """Încearcă să extragă JSON-ul Waze din răspunsul ScrapingAnt v2."""
-    try:
-        parsed_response = json.loads(raw_response)
-    except json.JSONDecodeError:
-        return {}
-
-    if not isinstance(parsed_response, dict):
-        return {}
-
-    # Unele versiuni/planuri pot returna JSON-ul Waze în câmpul content.
-    raw_content = parsed_response.get("content", "")
-
-    if isinstance(raw_content, dict):
-        return raw_content
-
-    if isinstance(raw_content, str) and raw_content.strip():
-        try:
-            parsed = json.loads(raw_content)
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-
-    # În răspunsul direct, obiectul JSON conține chiar câmpul alerts.
-    return parsed_response
-
+# -----------------------------------------------------------------------------
+# Formatarea mesajului
+# -----------------------------------------------------------------------------
 
 def build_accident_message(alert: dict[str, Any]) -> str:
+    """Construiește mesajul în formatul canalului de referință."""
     location = alert.get("location") or {}
     lat = location.get("y")
     lon = location.get("x")
 
     street = escape_html(alert.get("street") or "Drum nespecificat")
     city = escape_html(alert.get("city") or "Dublin")
-    subtype = escape_html(alert.get("subtype") or "")
+    reported_time = format_report_time(alert)
 
-    # Linkurile se construiesc doar când Waze a furnizat coordonate valide.
-    links = ""
+    report_rating = escape_html(alert.get("reportRating", 0))
+    reliability = escape_html(alert.get("reliability", 0))
+    confidence = escape_html(alert.get("confidence", 0))
+    thumbs_up = escape_html(alert.get("nThumbsUp", 0))
+    road_type = escape_html(alert.get("roadType", 0))
+
     if lat is not None and lon is not None:
         safe_lat = escape_html(lat)
         safe_lon = escape_html(lon)
-        links = (
-            f"\n🔗 <a href=\"https://www.waze.com/live-map?zoom=17&lat={safe_lat}&lon={safe_lon}\">"
-            "Vezi pe Live Map</a>"
-            f"\n🚗 <a href=\"https://www.waze.com/ul?ll={safe_lat},{safe_lon}&navigate=yes&zoom=17\">"
-            "Condu acolo</a>"
+
+        livemap_url = (
+            "https://www.waze.com/ro/livemap"
+            f"?zoom=17&lat={safe_lat}&lon={safe_lon}"
+        )
+        navigation_url = (
+            "https://www.waze.com/ul"
+            f"?ll={safe_lat},{safe_lon}&navigate=yes&zoom=17"
         )
 
-    subtype_line = f"\nTip: {subtype}" if subtype else ""
+        # URL-ul este afișat ca text, asemenea capturii trimise.
+        livemap_line = (
+            f"Vezi pe Livemap: "
+            f'<a href="{livemap_url}">{livemap_url}</a>'
+        )
+        navigation_line = (
+            f"Condu acolo: "
+            f'<a href="{navigation_url}">{navigation_url}</a>'
+        )
+    else:
+        livemap_line = "Vezi pe Livemap: coordonate indisponibile"
+        navigation_line = "Condu acolo: coordonate indisponibile"
 
     return (
-        f"🚨 <b>Accident raportat: {street}, {city}</b>"
-        f"{subtype_line}\n"
-        f"Sursă: Waze"
-        f"{links}"
+        f"🚨 <b>Accident : {street}, {city} raportat la {reported_time}</b>\n"
+        f"de = Wazer({report_rating}) "
+        f"Rel={reliability} "
+        f"Conf={confidence} "
+        f"ThumbsUp={thumbs_up}\n"
+        f"{livemap_line}\n\n"
+        f"{navigation_line}\n\n"
+        f"InfoAditionalRoadType: {road_type}"
     )
 
+
+# -----------------------------------------------------------------------------
+# Waze și jobul periodic
+# -----------------------------------------------------------------------------
 
 def check_waze() -> None:
     print("[WAZE JOB] Se preiau alertele...", flush=True)
 
-    # ScrapingAnt v2 cere cheia sub numele x-api-key. Conform exemplului
-    # oficial, x-api-key și url sunt parametri de query string.
+    # ScrapingAnt v2 documentează x-api-key și url ca parametri query.
     params = {
         "url": WAZE_URL,
         "x-api-key": SCRAPINGANT_API_KEY,
+        "browser": "true",
+        "timeout": str(min(max(REQUEST_TIMEOUT_SECONDS, 5), 60)),
     }
 
     try:
         response = requests.get(
             SCRAPINGANT_ENDPOINT,
             params=params,
-            timeout=REQUEST_TIMEOUT_SECONDS,
+            timeout=REQUEST_TIMEOUT_SECONDS + 5,
         )
 
         if response.status_code != 200:
-            detail = response.text[:500].replace("\n", " ")
+            detail = response.text[:1000].replace("\n", " ")
             print(
                 f"[WAZE JOB] ScrapingAnt HTTP {response.status_code}: {detail}",
                 flush=True,
@@ -181,27 +267,26 @@ def check_waze() -> None:
             )
             return
 
-        alerts = waze_data.get("alerts", [])
-
-        if not isinstance(alerts, list):
-            print("[WAZE JOB] Format neașteptat: alerts nu este listă.", flush=True)
-            return
-
+        alerts = get_alerts(waze_data)
         accident_count = 0
+        published_count = 0
 
         for alert in alerts:
-            if not isinstance(alert, dict):
-                continue
-
-            # Filtrare strictă: orice tip diferit de ACCIDENT este ignorat.
-            report_type = normalize_type(alert.get("type"))
-            if report_type != ACCIDENT_TYPE:
+            # Filtrare strictă: HAZARD, JAM, POLICE etc. sunt ignorate.
+            if normalize_type(alert.get("type")) != ACCIDENT_TYPE:
                 continue
 
             accident_count += 1
-            incident_id = str(alert.get("uuid") or alert.get("id") or "").strip()
+            incident_id = str(
+                alert.get("uuid") or alert.get("id") or ""
+            ).strip()
+
             if not incident_id:
-                print("[WAZE JOB] Accident fără ID, ignorat pentru a evita duplicatele.", flush=True)
+                print(
+                    "[WAZE JOB] Accident fără uuid/id; este ignorat pentru "
+                    "a evita duplicatele.",
+                    flush=True,
+                )
                 continue
 
             if incident_id in seen_incidents:
@@ -210,10 +295,15 @@ def check_waze() -> None:
             message = build_accident_message(alert)
             if send_telegram_alert(message):
                 seen_incidents.add(incident_id)
-                print(f"[WAZE JOB] Accident publicat: {incident_id}", flush=True)
+                published_count += 1
+                print(
+                    f"[WAZE JOB] Accident publicat: {incident_id}",
+                    flush=True,
+                )
 
         print(
-            f"[WAZE JOB] Au fost găsite {accident_count} accidente; "
+            f"[WAZE JOB] Accidente găsite: {accident_count}; "
+            f"mesaje publicate: {published_count}; "
             f"alerte totale: {len(alerts)}.",
             flush=True,
         )
