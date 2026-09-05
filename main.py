@@ -24,6 +24,7 @@ def required_env(name: str) -> str:
     return value
 
 
+# Valorile reale se configurează în Render, nu în GitHub.
 BOT_TOKEN = required_env("BOT_TOKEN")
 CHAT_ID = required_env("CHAT_ID")
 SCRAPINGANT_API_KEY = required_env("SCRAPINGANT_API_KEY")
@@ -41,8 +42,8 @@ SCRAPINGANT_ENDPOINT = "https://api.scrapingant.com/v2/general"
 ACCIDENT_TYPE = "ACCIDENT"
 DUBLIN_TIMEZONE = ZoneInfo("Europe/Dublin")
 
-# Deduplicare în memorie. Pentru deduplicare după restart este necesară o bază
-# de date persistentă, de exemplu SQLite.
+# Deduplicare în memorie. După repornirea serviciului, setul se golește.
+# Pentru deduplicare persistentă va fi necesară o bază de date SQLite.
 seen_incidents: set[str] = set()
 
 
@@ -56,15 +57,15 @@ def normalize_type(value: Any) -> str:
 
 
 def escape_html(value: Any) -> str:
-    """Protejează valorile introduse într-un mesaj Telegram cu parse_mode HTML."""
+    """Protejează valorile introduse într-un mesaj Telegram HTML."""
     return html.escape(str(value if value is not None else ""), quote=True)
 
 
 def format_report_time(alert: dict[str, Any]) -> str:
     """Returnează ora incidentului în fusul Europe/Dublin.
 
-    Waze poate folosi timestamp Unix în secunde sau milisecunde. Sunt încercate
-    mai multe nume de câmp întâlnite în răspunsurile endpointului.
+    Sunt încercate mai multe câmpuri și sunt acceptate timestampuri Unix
+    exprimate în secunde sau milisecunde.
     """
     timestamp = (
         alert.get("pubMillis")
@@ -79,8 +80,6 @@ def format_report_time(alert: dict[str, Any]) -> str:
 
     try:
         numeric_timestamp = float(timestamp)
-
-        # Timestampurile mai mari sunt, de obicei, exprimate în milisecunde.
         if numeric_timestamp > 10_000_000_000:
             numeric_timestamp /= 1000
 
@@ -116,12 +115,12 @@ def extract_waze_payload(raw_response: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
-    # În cazul răspunsului JSON direct, obiectul conține câmpul alerts.
+    # În cazul răspunsului JSON direct, obiectul conține chiar alerts.
     return parsed_response
 
 
 def get_alerts(waze_data: dict[str, Any]) -> list[dict[str, Any]]:
-    """Returnează lista de alerte, dacă răspunsul are forma așteptată."""
+    """Returnează alertele într-o formă sigură."""
     alerts = waze_data.get("alerts", [])
     if not isinstance(alerts, list):
         return []
@@ -204,13 +203,12 @@ def build_accident_message(alert: dict[str, Any]) -> str:
             f"?ll={safe_lat},{safe_lon}&navigate=yes&zoom=17"
         )
 
-        # URL-ul este afișat ca text, asemenea capturii trimise.
         livemap_line = (
-            f"Vezi pe Livemap: "
+            "Vezi pe Livemap: "
             f'<a href="{livemap_url}">{livemap_url}</a>'
         )
         navigation_line = (
-            f"Condu acolo: "
+            "Condu acolo: "
             f'<a href="{navigation_url}">{navigation_url}</a>'
         )
     else:
@@ -236,11 +234,13 @@ def build_accident_message(alert: dict[str, Any]) -> str:
 def check_waze() -> None:
     print("[WAZE JOB] Se preiau alertele...", flush=True)
 
-    # ScrapingAnt v2 documentează x-api-key și url ca parametri query.
+    # Endpointul Waze este tratat ca endpoint de date, fără browser headless.
+    # browser=false evită detectarea browserului ScrapingAnt de către Waze.
     params = {
         "url": WAZE_URL,
         "x-api-key": SCRAPINGANT_API_KEY,
-        "browser": "true",
+        "browser": "false",
+        "return_page_source": "true",
         "timeout": str(min(max(REQUEST_TIMEOUT_SECONDS, 5), 60)),
     }
 
