@@ -8,13 +8,12 @@ app = Flask(__name__)
 BOT_TOKEN = "8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c"
 CHAT_ID = "-1004349956233"
 
-# Waze GeoRSS Feed accesat printr-un proxy CORS public
-WAZE_TARGET = (
-    "https://www.waze.com/live-map/api/georss"
+# Endpoint-ul direct de mobil (bypass Cloudflare web)
+WAZE_URL = (
+    "https://www.waze.com/row-rtserver/web/TGeoRSS"
     "?top=53.45&bottom=53.20&left=-6.45&right=-6.05"
     "&env=row&types=alerts"
 )
-PROXY_URL = f"https://corsproxy.io/?{requests.utils.quote(WAZE_TARGET)}"
 
 seen_incidents = set()
 
@@ -32,23 +31,31 @@ def send_telegram_alert(text):
         print(f"[Telegram Error]: {e}", flush=True)
 
 def check_waze():
-    print("[WAZE JOB] Fetching Waze data via CORS Proxy...", flush=True)
+    print("[WAZE JOB] Querying Waze Mobile Endpoint...", flush=True)
 
+    # Identitate simulată de aplicație mobilă Android
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        "User-Agent": "Waze/4.90.0.0 (Android; Mobile)",
+        "Accept": "application/json",
+        "Connection": "keep-alive"
     }
 
     try:
-        response = requests.get(PROXY_URL, headers=headers, timeout=10)
+        response = requests.get(WAZE_URL, headers=headers, timeout=10)
 
         if response.status_code != 200:
-            print(f"[WAZE JOB] Status Error: HTTP {response.status_code}", flush=True)
+            print(f"[WAZE JOB] HTTP Error {response.status_code}", flush=True)
             return
 
-        data = response.json()
-        alerts = data.get("alerts", [])
+        # Verificăm dacă răspunsul este într-adevăr JSON
+        try:
+            data = response.json()
+        except Exception:
+            print("[WAZE JOB] Response was not JSON (blocked by Cloudflare/Waze).", flush=True)
+            return
 
-        print(f"[WAZE JOB] SUCCESS! Found {len(alerts)} alerts in Dublin.", flush=True)
+        alerts = data.get("alerts", [])
+        print(f"[WAZE JOB] SUCCESS! Received {len(alerts)} alerts from Dublin.", flush=True)
 
         for alert in alerts:
             uuid = alert.get("uuid") or alert.get("id")
