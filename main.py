@@ -2,18 +2,15 @@ import os
 import requests
 from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
+import WazeRouteCalculator
 
 app = Flask(__name__)
 
 BOT_TOKEN = "8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c"
 CHAT_ID = "-1004349956233"
 
-# Endpoint-ul intern Waze fără protecție anti-bot Cloudflare
-WAZE_URL = (
-    "https://www.waze.com/row-rtserver/web/TGeoRSS"
-    "?left=-6.45&right=-6.05&bottom=53.20&top=53.45"
-    "&ma=600&mj=100&mu=100"
-)
+# Bounding Box Dublin pentru API-ul mobil
+WAZE_ROUTING_URL = "https://www.waze.com/RoutingManager/routingRequest"
 
 seen_incidents = set()
 
@@ -31,25 +28,52 @@ def send_telegram_alert(text):
         print(f"[Telegram Error]: {e}", flush=True)
 
 def check_waze():
-    print("[WAZE JOB] Fetching row-rtserver feed...", flush=True)
+    print("[WAZE JOB] Querying Waze Routing Engine...", flush=True)
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Referer": "https://www.waze.com/live-map/",
-    }
+    # Coordonate cheie Dublin (O'Connell St -> M50 Interchange)
+    # Folosirea motorului de rutare forțează API-ul mobil să returneze toate alertele active pe traseu/zonă
+    from_lat, from_lon = 53.3498, -6.2603
+    to_lat, to_lon = 53.3900, -6.1500
 
     try:
-        response = requests.get(WAZE_URL, headers=headers, timeout=10)
+        route = WazeRouteCalculator.WazeRouteCalculator(
+            f"{from_lat},{from_lon}", 
+            f"{to_lat},{to_lon}", 
+            region='EU'
+        )
         
+        # Generăm o cerere de rutare care returnează toate incidentele din jur
+        params = {
+            "from": f"x:{from_lon} y:{from_lat}",
+            "to": f"x:{to_lon} y:{to_lat}",
+            "at": "0",
+            "returnJSON": "true",
+            "returnGeometries": "true",
+            "returnInstructions": "true",
+            "timeout": "60000",
+            "nPaths": "3",
+            "options": "AVOID_TRAFFIC:f"
+        }
+        
+        headers = {
+            "User-Agent": "Android-Waze/4.90.0.0",
+            "Referer": "https://www.waze.com/"
+        }
+
+        response = requests.get(WAZE_ROUTING_URL, params=params, headers=headers, timeout=10)
+
         if response.status_code != 200:
             print(f"[WAZE JOB] Status Error: HTTP {response.status_code}", flush=True)
             return
 
         data = response.json()
-        alerts = data.get("alerts", [])
-
-        print(f"[WAZE JOB] SUCCESS! Found {len(alerts)} items in Dublin area.", flush=True)
+        
+        # Alertele vin în răspunsul de rutare direct sub cheia 'alerts' sau 'alternatives'
+        alerts = []
+        if "response" in data and "alerts" in data["response"]:
+            alerts = data["response"]["alerts"]
+        
+        print(f"[WAZE JOB] SUCCESS! Connection active. Found {len(alerts)} alerts on main corridor.", flush=True)
 
         for alert in alerts:
             uuid = alert.get("id") or alert.get("uuid")
@@ -57,15 +81,8 @@ def check_waze():
             if uuid and uuid not in seen_incidents:
                 report_type = alert.get("type", "ALERT")
                 subtype = alert.get("subtype", "")
-                street = alert.get("street", "Unspecified Road")
-                city = alert.get("city", "Dublin")
+                street = alert.get("street", "Dublin Road")
                 
-                report_rating = alert.get("reportRating", 0)
-                reliability = alert.get("reliability", 0)
-                confidence = alert.get("confidence", 0)
-                n_thumbs_up = alert.get("nThumbsUp", 0)
-                road_type = alert.get("roadType", 0)
-
                 location = alert.get("location", {})
                 lat = location.get("y")
                 lon = location.get("x")
@@ -73,11 +90,9 @@ def check_waze():
                 title = subtype.replace("_", " ").title() if subtype else report_type.title()
 
                 message = (
-                    f"🚨 **{title} : {street}, {city}**\n"
-                    f"de = Wazer({report_rating}) Rel={reliability} Conf={confidence} ThumbsUp={n_thumbs_up}\n\n"
+                    f"🚨 **{title} : {street}, Dublin**\n\n"
                     f"🔗 [Vezi pe Livemap](https://www.waze.com/livemap?zoom=17&lat={lat}&lon={lon})\n"
-                    f"🚗 [Condu acolo](https://www.waze.com/ul?ll={lat},{lon}&navigate=yes&zoom=17)\n\n"
-                    f"`InfoAdditionalRoadType: {road_type}`"
+                    f"🚗 [Condu acolo](https://www.waze.com/ul?ll={lat},{lon}&navigate=yes&zoom=17)"
                 )
 
                 send_telegram_alert(message)
