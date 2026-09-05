@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -8,11 +9,10 @@ app = Flask(__name__)
 BOT_TOKEN = "8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c"
 CHAT_ID = "-1004349956233"
 
-# Pune AICI cheia ta de la ScrapingAnt
+# Cheia ta ScrapingAnt
 SCRAPINGANT_API_KEY = "3a79ecac33a64c3aab256e9bf39656c1"
 
 WAZE_URL = "https://www.waze.com/live-map/api/georss?top=53.45&bottom=53.20&left=-6.45&right=-6.05&env=row&types=alerts"
-PROXY_ENDPOINT = f"https://api.scrapingant.com/v2/general?api_key={SCRAPINGANT_API_KEY}&url={requests.utils.quote(WAZE_URL)}&proxy_type=residential"
 
 seen_incidents = set()
 
@@ -30,17 +30,33 @@ def send_telegram_alert(text):
         print(f"[Telegram Error]: {e}", flush=True)
 
 def check_waze():
-    print("[WAZE JOB] Fetching via Residential Proxy...", flush=True)
+    print("[WAZE JOB] Fetching via ScrapingAnt Proxy...", flush=True)
+
+    # Configurare compatibilă cu planul gratuit ScrapingAnt
+    proxy_endpoint = "https://api.scrapingant.com/v2/general"
+    params = {
+        "api_key": SCRAPINGANT_API_KEY,
+        "url": WAZE_URL,
+        "browser_scanner": "true"
+    }
 
     try:
-        response = requests.get(PROXY_ENDPOINT, timeout=20)
+        response = requests.get(proxy_endpoint, params=params, timeout=30)
 
         if response.status_code != 200:
             print(f"[WAZE JOB] Status Error: HTTP {response.status_code}", flush=True)
             return
 
         data = response.json()
-        alerts = data.get("alerts", [])
+        raw_content = data.get("content", "")
+
+        # Preluăm datele extrase din pagina Waze
+        try:
+            waze_data = json.loads(raw_content)
+        except Exception:
+            waze_data = data
+
+        alerts = waze_data.get("alerts", [])
         print(f"[WAZE JOB] SUCCESS! Received {len(alerts)} alerts in Dublin.", flush=True)
 
         for alert in alerts:
@@ -78,7 +94,6 @@ def check_waze():
     except Exception as e:
         print(f"[WAZE JOB] Exception: {e}", flush=True)
 
-# Schimbăm la 3 minute pentru a încadra cererile în limita gratuită lunară
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(check_waze, 'interval', minutes=3)
 scheduler.start()
