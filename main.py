@@ -1,34 +1,27 @@
 import os
-import cloudscraper
+import requests
 from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
+from pywaze import WazeRouteCalculator
 
 app = Flask(__name__)
 
 BOT_TOKEN = "8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c"
 CHAT_ID = "-1004349956233"
 
-WAZE_URL = (
-    "https://www.waze.com/live-map/api/georss"
-    "?top=53.45&bottom=53.20&left=-6.45&right=-6.05"
-    "&env=row&types=alerts,jams"
+# Feed alternativ API direct prin coordonate de mobil
+WAZE_MOBILE_URL = (
+    "https://www.waze.com/row-rtserver/web/TGeoRSS"
+    "?left=-6.45&right=-6.05&bottom=53.20&top=53.45"
+    "&types=alerts"
 )
 
 seen_incidents = set()
 
-# Inițializare cloudscraper (evită blocajele Cloudflare 403 / 500)
-scraper = cloudscraper.create_scraper(
-    browser={
-        'browser': 'chrome',
-        'platform': 'windows',
-        'desktop': True
-    }
-)
-
 ALERT_TYPES = {
     "ACCIDENT": {"emoji": "🚨", "title": "Accident"},
     "POLICE": {"emoji": "👮‍♂️", "title": "Police Presence"},
-    "JAM": {"emoji": "🚗🚗", "title": "Traffic Jam"},
+    "JAM": {"emoji": "🚗🚗", "title": "Heavy Traffic Jam"},
     "WEATHERHAZARD": {"emoji": "⚠️", "title": "Weather Hazard"},
     "HAZARD": {"emoji": "⚠️", "title": "Road Hazard"},
     "ROAD_CLOSED": {"emoji": "⛔", "title": "Road Closed"}
@@ -43,15 +36,20 @@ def send_telegram_alert(text):
         "disable_web_page_preview": False,
     }
     try:
-        scraper.post(url, json=payload, timeout=5)
+        requests.post(url, json=payload, timeout=5)
     except Exception as e:
         print(f"[Telegram Error]: {e}", flush=True)
 
 def check_waze():
-    print("[WAZE JOB] Fetching data via CloudScraper...", flush=True)
+    print("[WAZE JOB] Fetching Mobile API data...", flush=True)
+
+    headers = {
+        "User-Agent": "Waze/4.90.0.0 (Android; OK1)",
+        "Host": "www.waze.com"
+    }
 
     try:
-        response = scraper.get(WAZE_URL, timeout=10)
+        response = requests.get(WAZE_MOBILE_URL, headers=headers, timeout=10)
         
         if response.status_code != 200:
             print(f"[WAZE JOB] Status Error: HTTP {response.status_code}", flush=True)
