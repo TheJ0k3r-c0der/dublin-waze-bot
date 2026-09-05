@@ -8,10 +8,11 @@ app = Flask(__name__)
 BOT_TOKEN = "8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c"
 CHAT_ID = "-1004349956233"
 
+# URL-ul GeoRSS public Waze (bypass la blocajul 403)
 WAZE_URL = (
-    "https://www.waze.com/live-map/api/georss"
-    "?top=53.45&bottom=53.20&left=-6.45&right=-6.05"
-    "&env=row&types=alerts,jams"
+    "https://www.waze.com/rtserver/web/TGeoRSS"
+    "?left=-6.45&right=-6.05&bottom=53.20&top=53.45"
+    "&types=alerts,jams"
 )
 
 seen_incidents = set()
@@ -39,26 +40,31 @@ def send_telegram_alert(text):
         print(f"[Telegram Error]: {e}", flush=True)
 
 def check_waze():
-    print("[WAZE JOB] Running Waze check...", flush=True)
+    print("[WAZE JOB] Connecting to Waze GeoRSS...", flush=True)
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.waze.com/live-map/",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
     try:
         response = requests.get(WAZE_URL, headers=headers, timeout=10)
+        
         if response.status_code != 200:
             print(f"[WAZE JOB] Error HTTP {response.status_code}", flush=True)
             return
 
         data = response.json()
+        
+        # Extragere alerte din structura GeoRSS
         alerts = data.get("alerts", [])
-        print(f"[WAZE JOB] Success: Found {len(alerts)} alerts in Dublin.", flush=True)
+        if not alerts and "commons" in data:
+            alerts = data.get("commons", [])
+
+        print(f"[WAZE JOB] Success! Found {len(alerts)} active reports in Dublin.", flush=True)
 
         for alert in alerts:
-            uuid = alert.get("uuid")
+            uuid = alert.get("uuid") or f"{alert.get('location', {}).get('x')}_{alert.get('location', {}).get('y')}"
+
             if uuid not in seen_incidents:
                 alert_type = alert.get("type", "HAZARD")
                 street = alert.get("street", "Unspecified Road")
@@ -84,7 +90,6 @@ def check_waze():
     except Exception as e:
         print(f"[WAZE JOB] Exception: {e}", flush=True)
 
-# Configurare Scheduler (rulează check_waze la fiecare 60 secunde)
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(check_waze, 'interval', seconds=60)
 scheduler.start()
