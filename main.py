@@ -1,23 +1,13 @@
 import os
-import threading
-import time
 import requests
 from flask import Flask
+from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "Dublin Waze Multi-Alert Bot is running 24/7!"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
 
 BOT_TOKEN = "8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c"
 CHAT_ID = "-1004349956233"
 
-# URL actualizat pentru Waze LiveMap Feed
 WAZE_URL = (
     "https://www.waze.com/live-map/api/georss"
     "?top=53.45&bottom=53.20&left=-6.45&right=-6.05"
@@ -46,37 +36,29 @@ def send_telegram_alert(text):
     try:
         requests.post(url, json=payload, timeout=5)
     except Exception as e:
-        print(f"[Telegram Error]: {e}")
+        print(f"[Telegram Error]: {e}", flush=True)
 
 def check_waze():
-    # Antete complete pentru a evita blocajele Cloudflare / Waze pe servere cloud
+    print("[WAZE JOB] Running Waze check...", flush=True)
+    
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
         "Referer": "https://www.waze.com/live-map/",
-        "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"',
     }
 
     try:
         response = requests.get(WAZE_URL, headers=headers, timeout=10)
-        
         if response.status_code != 200:
-            print(f"[{time.strftime('%H:%M:%S')}] Waze Error {response.status_code}: Access Blocked or Server Error")
+            print(f"[WAZE JOB] Error HTTP {response.status_code}", flush=True)
             return
 
         data = response.json()
         alerts = data.get("alerts", [])
-        jams = data.get("jams", [])
+        print(f"[WAZE JOB] Success: Found {len(alerts)} alerts in Dublin.", flush=True)
 
-        print(f"[{time.strftime('%H:%M:%S')}] Success: Found {len(alerts)} alerts and {len(jams)} jams in Dublin.")
-
-        # Procesăm alertele
         for alert in alerts:
             uuid = alert.get("uuid")
-
             if uuid not in seen_incidents:
                 alert_type = alert.get("type", "HAZARD")
                 street = alert.get("street", "Unspecified Road")
@@ -100,16 +82,17 @@ def check_waze():
                 seen_incidents.add(uuid)
 
     except Exception as e:
-        print(f"[{time.strftime('%H:%M:%S')}] Exception: {e}")
+        print(f"[WAZE JOB] Exception: {e}", flush=True)
 
-def waze_loop():
-    while True:
-        check_waze()
-        time.sleep(60)
+# Configurare Scheduler (rulează check_waze la fiecare 60 secunde)
+scheduler = BackgroundScheduler(daemon=True)
+scheduler.add_job(check_waze, 'interval', seconds=60)
+scheduler.start()
+
+@app.route("/")
+def home():
+    return "Dublin Waze Multi-Alert Bot is running 24/7!"
 
 if __name__ == "__main__":
-    t = threading.Thread(target=waze_loop)
-    t.daemon = True
-    t.start()
-
-    run_flask()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
