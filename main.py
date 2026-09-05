@@ -27,7 +27,6 @@ def required_env(name: str) -> str:
 # Valorile reale se configurează în Render, nu în GitHub.
 BOT_TOKEN = required_env("BOT_TOKEN")
 CHAT_ID = required_env("CHAT_ID")
-SCRAPINGANT_API_KEY = required_env("SCRAPINGANT_API_KEY")
 
 WAZE_URL = os.getenv(
     "WAZE_URL",
@@ -35,12 +34,10 @@ WAZE_URL = os.getenv(
 ).strip()
 
 POLL_INTERVAL_MINUTES = int(os.getenv("POLL_INTERVAL_MINUTES", "3"))
-REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "60"))
+REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
 TELEGRAM_TIMEOUT_SECONDS = int(os.getenv("TELEGRAM_TIMEOUT_SECONDS", "10"))
-
-SCRAPINGANT_ENDPOINT = "https://api.scrapingant.com/v2/general"
-ACCIDENT_TYPE = "ACCIDENT"
 DUBLIN_TIMEZONE = ZoneInfo("Europe/Dublin")
+ACCIDENT_TYPE = "ACCIDENT"
 
 # Deduplicare în memorie. După repornirea serviciului, setul se golește.
 # Pentru deduplicare persistentă va fi necesară o bază de date SQLite.
@@ -62,11 +59,7 @@ def escape_html(value: Any) -> str:
 
 
 def format_report_time(alert: dict[str, Any]) -> str:
-    """Returnează ora incidentului în fusul Europe/Dublin.
-
-    Sunt încercate mai multe câmpuri și sunt acceptate timestampuri Unix
-    exprimate în secunde sau milisecunde.
-    """
+    """Returnează ora incidentului în fusul Europe/Dublin."""
     timestamp = (
         alert.get("pubMillis")
         or alert.get("pubMillisUTC")
@@ -92,7 +85,7 @@ def format_report_time(alert: dict[str, Any]) -> str:
 
 
 def extract_waze_payload(raw_response: str) -> dict[str, Any]:
-    """Extrage payloadul JSON Waze din răspunsul ScrapingAnt."""
+    """Extrage obiectul JSON Waze din răspunsul endpointului direct."""
     try:
         parsed_response = json.loads(raw_response)
     except json.JSONDecodeError:
@@ -101,9 +94,8 @@ def extract_waze_payload(raw_response: str) -> dict[str, Any]:
     if not isinstance(parsed_response, dict):
         return {}
 
-    # Unele răspunsuri pot împacheta conținutul în câmpul content.
+    # Compatibilitate cu răspunsuri care împachetează conținutul în content.
     raw_content = parsed_response.get("content")
-
     if isinstance(raw_content, dict):
         return raw_content
 
@@ -115,7 +107,6 @@ def extract_waze_payload(raw_response: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
-    # În cazul răspunsului JSON direct, obiectul conține chiar alerts.
     return parsed_response
 
 
@@ -232,29 +223,25 @@ def build_accident_message(alert: dict[str, Any]) -> str:
 # -----------------------------------------------------------------------------
 
 def check_waze() -> None:
-    print("[WAZE JOB] Se preiau alertele...", flush=True)
+    print("[VERSION] DIRECT_WAZE_1", flush=True)
+    print("[WAZE JOB] Se preiau alertele direct de la Waze...", flush=True)
 
-    # Endpointul Waze este tratat ca endpoint de date, fără browser headless.
-    # browser=false evită detectarea browserului ScrapingAnt de către Waze.
-    params = {
-        "url": WAZE_URL,
-        "x-api-key": SCRAPINGANT_API_KEY,
-        "browser": "false",
-        "return_page_source": "true",
-        "timeout": str(min(max(REQUEST_TIMEOUT_SECONDS, 5), 60)),
+    headers = {
+        "User-Agent": "Dublin-Waze-Bot/1.0",
+        "Accept": "application/json, application/xml, text/plain, */*",
     }
 
     try:
         response = requests.get(
-            SCRAPINGANT_ENDPOINT,
-            params=params,
-            timeout=REQUEST_TIMEOUT_SECONDS + 5,
+            WAZE_URL,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT_SECONDS,
         )
 
         if response.status_code != 200:
             detail = response.text[:1000].replace("\n", " ")
             print(
-                f"[WAZE JOB] ScrapingAnt HTTP {response.status_code}: {detail}",
+                f"[WAZE JOB] Waze HTTP {response.status_code}: {detail}",
                 flush=True,
             )
             return
@@ -262,7 +249,7 @@ def check_waze() -> None:
         waze_data = extract_waze_payload(response.text)
         if not waze_data:
             print(
-                "[WAZE JOB] Răspunsul ScrapingAnt nu conține JSON Waze valid.",
+                "[WAZE JOB] Waze nu a returnat JSON valid.",
                 flush=True,
             )
             return
@@ -309,7 +296,7 @@ def check_waze() -> None:
         )
 
     except requests.RequestException as exc:
-        print(f"[WAZE JOB] Eroare HTTP: {exc}", flush=True)
+        print(f"[WAZE JOB] Eroare directă Waze: {exc}", flush=True)
     except (ValueError, TypeError, KeyError) as exc:
         print(f"[WAZE JOB] Răspuns Waze invalid: {exc}", flush=True)
     except Exception as exc:
