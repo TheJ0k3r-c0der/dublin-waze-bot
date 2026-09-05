@@ -9,7 +9,7 @@ BOT_TOKEN = "8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c"
 CHAT_ID = "-1004349956233"
 
 # Pune AICI cheia ta de la ScrapingAnt
-SCRAPINGANT_API_KEY = "PUNE_AICI_API_KEY_DE_LA_SCRAPINGANT"
+SCRAPINGANT_API_KEY = "3a79ecac33a64c3aab256e9bf39656c1"
 
 WAZE_URL = "https://www.waze.com/live-map/api/georss?top=53.45&bottom=53.20&left=-6.45&right=-6.05&env=row&types=alerts"
 PROXY_ENDPOINT = f"https://api.scrapingant.com/v2/general?api_key={SCRAPINGANT_API_KEY}&url={requests.utils.quote(WAZE_URL)}&proxy_type=residential"
