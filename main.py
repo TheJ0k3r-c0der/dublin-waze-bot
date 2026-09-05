@@ -4,22 +4,22 @@ import time
 import requests
 from flask import Flask
 
-# 1. Dummy Web Server for Render
+# 1. Server Web pentru Render
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Dublin Waze Multi-Alert Bot is running 24/7!"
+    return "Dublin Waze Bot is Active!"
 
-def run_web_server():
-    port = int(os.environ.get("PORT", 8080))
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
-# 2. Telegram Credentials
+# 2. Date Telegram
 BOT_TOKEN = "8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c"
 CHAT_ID = "-1004349956233"
 
-# 3. Waze Bounding Box Coordinates for Dublin
+# 3. Coordonate Waze Dublin
 WAZE_URL = (
     "https://www.waze.com/live-map/api/georss"
     "?top=53.45&bottom=53.20&left=-6.45&right=-6.05"
@@ -28,12 +28,11 @@ WAZE_URL = (
 
 seen_incidents = set()
 
-# Emoji-uri și titluri în funcție de tipul de alertă
 ALERT_TYPES = {
     "ACCIDENT": {"emoji": "🚨", "title": "Accident"},
     "POLICE": {"emoji": "👮‍♂️", "title": "Police Presence"},
     "JAM": {"emoji": "🚗🚗", "title": "Heavy Traffic Jam"},
-    "WEATHERHAZARD": {"emoji": "⚠️", "title": "Weather Hazard / Road Hazard"},
+    "WEATHERHAZARD": {"emoji": "⚠️", "title": "Weather Hazard"},
     "HAZARD": {"emoji": "⚠️", "title": "Road Hazard"},
     "ROAD_CLOSED": {"emoji": "⛔", "title": "Road Closed"}
 }
@@ -47,13 +46,9 @@ def send_telegram_alert(text):
         "disable_web_page_preview": False,
     }
     try:
-        response = requests.post(url, json=payload)
-        if response.status_code == 200:
-            print("[OK] Alert sent successfully to Telegram!")
-        else:
-            print(f"[Telegram Error] Status {response.status_code}: {response.text}")
+        requests.post(url, json=payload, timeout=5)
     except Exception as e:
-        print(f"[Telegram Network Error]: {e}")
+        print(f"[Telegram Error]: {e}")
 
 def check_waze():
     headers = {
@@ -67,18 +62,17 @@ def check_waze():
     try:
         response = requests.get(WAZE_URL, headers=headers, timeout=10)
         if response.status_code != 200:
-            print(f"[Waze Error] Could not retrieve data. Status: {response.status_code}")
+            print(f"[{time.strftime('%H:%M:%S')}] Waze Status Code: {response.status_code}")
             return
 
         data = response.json()
         alerts = data.get("alerts", [])
 
-        print(f"[{time.strftime('%H:%M:%S')}] Fetched {len(alerts)} total alerts from Dublin area...")
+        print(f"[{time.strftime('%H:%M:%S')}] Waze Check OK: {len(alerts)} alerts found in Dublin.")
 
         for alert in alerts:
             uuid = alert.get("uuid")
 
-            # Procesăm doar alertele noi
             if uuid not in seen_incidents:
                 alert_type = alert.get("type", "HAZARD")
                 street = alert.get("street", "Unspecified Road")
@@ -87,16 +81,10 @@ def check_waze():
                 lat = location.get("y")
                 lon = location.get("x")
 
-                # Preluăm emoji-ul și titlul corespunzător
                 type_info = ALERT_TYPES.get(alert_type, {"emoji": "⚠️", "title": "Traffic Alert"})
                 emoji = type_info["emoji"]
-                
-                if subtype:
-                    clean_title = subtype.replace("_", " ").title()
-                else:
-                    clean_title = type_info["title"]
+                clean_title = subtype.replace("_", " ").title() if subtype else type_info["title"]
 
-                # Mesaj în engleză
                 message = (
                     f"{emoji} **{clean_title} in Dublin**\n\n"
                     f"📍 **Location:** {street}\n"
@@ -108,18 +96,18 @@ def check_waze():
                 seen_incidents.add(uuid)
 
     except Exception as e:
-        print(f"[Waze Processing Error]: {e}")
+        print(f"[{time.strftime('%H:%M:%S')}] Error: {e}")
 
 def waze_loop():
     while True:
         check_waze()
-        time.sleep(90)
+        time.sleep(60)
 
 if __name__ == "__main__":
-    print("=== Dublin Waze Multi-Alert Bot Started ===")
-    
-    # Start Waze checking in background
-    threading.Thread(target=waze_loop, daemon=True).start()
-    
-    # Start web server for Render
-    run_web_server()
+    # Pornim verificarea Waze pe un fir de execuție separat
+    t = threading.Thread(target=waze_loop)
+    t.daemon = True
+    t.start()
+
+    # Pornim serverul Web
+    run_flask()
