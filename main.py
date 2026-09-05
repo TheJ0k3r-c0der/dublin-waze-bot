@@ -1,5 +1,5 @@
 import os
-import requests
+import cloudscraper
 from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -8,20 +8,27 @@ app = Flask(__name__)
 BOT_TOKEN = "8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c"
 CHAT_ID = "-1004349956233"
 
-# URL Waze trecut prin proxy pentru a evita blocajul 403
-TARGET_URL = (
+WAZE_URL = (
     "https://www.waze.com/live-map/api/georss"
     "?top=53.45&bottom=53.20&left=-6.45&right=-6.05"
-    "&env=row&types=alerts"
+    "&env=row&types=alerts,jams"
 )
-WAZE_URL = f"https://api.allorigins.win/raw?url={requests.utils.quote(TARGET_URL)}"
 
 seen_incidents = set()
+
+# Inițializare cloudscraper (evită blocajele Cloudflare 403 / 500)
+scraper = cloudscraper.create_scraper(
+    browser={
+        'browser': 'chrome',
+        'platform': 'windows',
+        'desktop': True
+    }
+)
 
 ALERT_TYPES = {
     "ACCIDENT": {"emoji": "🚨", "title": "Accident"},
     "POLICE": {"emoji": "👮‍♂️", "title": "Police Presence"},
-    "JAM": {"emoji": "🚗🚗", "title": "Heavy Traffic Jam"},
+    "JAM": {"emoji": "🚗🚗", "title": "Traffic Jam"},
     "WEATHERHAZARD": {"emoji": "⚠️", "title": "Weather Hazard"},
     "HAZARD": {"emoji": "⚠️", "title": "Road Hazard"},
     "ROAD_CLOSED": {"emoji": "⛔", "title": "Road Closed"}
@@ -36,24 +43,24 @@ def send_telegram_alert(text):
         "disable_web_page_preview": False,
     }
     try:
-        requests.post(url, json=payload, timeout=5)
+        scraper.post(url, json=payload, timeout=5)
     except Exception as e:
         print(f"[Telegram Error]: {e}", flush=True)
 
 def check_waze():
-    print("[WAZE JOB] Fetching Waze data via Proxy...", flush=True)
+    print("[WAZE JOB] Fetching data via CloudScraper...", flush=True)
 
     try:
-        response = requests.get(WAZE_URL, timeout=15)
+        response = scraper.get(WAZE_URL, timeout=10)
         
         if response.status_code != 200:
-            print(f"[WAZE JOB] Proxy Error HTTP {response.status_code}", flush=True)
+            print(f"[WAZE JOB] Status Error: HTTP {response.status_code}", flush=True)
             return
 
         data = response.json()
         alerts = data.get("alerts", [])
 
-        print(f"[WAZE JOB] SUCCESS! Found {len(alerts)} alerts in Dublin.", flush=True)
+        print(f"[WAZE JOB] SUCCESS! Found {len(alerts)} alerts in Dublin area.", flush=True)
 
         for alert in alerts:
             uuid = alert.get("uuid")
