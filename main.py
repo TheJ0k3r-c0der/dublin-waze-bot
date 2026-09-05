@@ -8,27 +8,25 @@ app = Flask(__name__)
 BOT_TOKEN = "8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c"
 CHAT_ID = "-1004349956233"
 
-# Endpoint-ul folosit de Waze LiveMap exact ca în exemplul tău
+# Endpoint-ul curent pentru LiveMap (corectat fără 404)
 WAZE_URL = (
-    "https://www.waze.com/row-rtserver/web/TGeoRSS"
-    "?left=-6.45&right=-6.05&bottom=53.20&top=53.45"
-    "&ma=600&mj=100&mu=100"
+    "https://www.waze.com/live-map/api/georss"
+    "?top=53.45&bottom=53.20&left=-6.45&right=-6.05"
+    "&env=row&types=alerts"
 )
 
 seen_incidents = set()
-
-# Creăm o sesiune HTTP persistentă pentru a menține cookie-urile
 session = requests.Session()
 
 def init_session():
-    """Simulează prima vizită a unui utilizator pe site pentru a obține cookie-uri valide."""
-    init_headers = {
+    """Inițializează cookie-urile accesând pagina principala LiveMap."""
+    headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
     }
     try:
-        session.get("https://www.waze.com/live-map", headers=init_headers, timeout=10)
+        session.get("https://www.waze.com/live-map", headers=headers, timeout=10)
         print("[SESSION] Cookies initialized successfully.", flush=True)
     except Exception as e:
         print(f"[SESSION Error]: {e}", flush=True)
@@ -59,7 +57,6 @@ def check_waze():
     try:
         response = session.get(WAZE_URL, headers=headers, timeout=10)
         
-        # Dacă sesiunea expiră sau returnează blocaj, reinițializăm cookie-urile
         if response.status_code in [403, 401]:
             print(f"[WAZE JOB] Status {response.status_code}. Re-initializing session...", flush=True)
             init_session()
@@ -83,7 +80,6 @@ def check_waze():
                 street = alert.get("street", "Unspecified Road")
                 city = alert.get("city", "Dublin")
                 
-                # Extragere detalii tehnice (la fel ca în botul din București)
                 report_rating = alert.get("reportRating", 0)
                 reliability = alert.get("reliability", 0)
                 confidence = alert.get("confidence", 0)
@@ -96,9 +92,8 @@ def check_waze():
 
                 title = subtype.replace("_", " ").title() if subtype else report_type.title()
 
-                # Formatare identică cu structura din imaginea ta
                 message = (
-                    f"🚨 **Accident : {street}, {city}**\n"
+                    f"🚨 **{title} : {street}, {city}**\n"
                     f"de = Wazer({report_rating}) Rel={reliability} Conf={confidence} ThumbsUp={n_thumbs_up}\n\n"
                     f"🔗 [Vezi pe Livemap](https://www.waze.com/livemap?zoom=17&lat={lat}&lon={lon})\n"
                     f"🚗 [Condu acolo](https://www.waze.com/ul?ll={lat},{lon}&navigate=yes&zoom=17)\n\n"
@@ -111,7 +106,6 @@ def check_waze():
     except Exception as e:
         print(f"[WAZE JOB] Exception: {e}", flush=True)
 
-# Initializăm cookie-urile la pornire
 init_session()
 
 scheduler = BackgroundScheduler(daemon=True)
