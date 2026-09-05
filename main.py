@@ -4,7 +4,6 @@ import time
 import requests
 from flask import Flask
 
-# 1. Dummy Web Server for Render
 app = Flask(__name__)
 
 @app.route("/")
@@ -15,15 +14,14 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
-# 2. Telegram Credentials
 BOT_TOKEN = "8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c"
 CHAT_ID = "-1004349956233"
 
-# 3. Waze Bounding Box Coordinates for Dublin
+# URL actualizat pentru Waze LiveMap Feed
 WAZE_URL = (
     "https://www.waze.com/live-map/api/georss"
     "?top=53.45&bottom=53.20&left=-6.45&right=-6.05"
-    "&env=row&types=alerts"
+    "&env=row&types=alerts,jams"
 )
 
 seen_incidents = set()
@@ -31,7 +29,7 @@ seen_incidents = set()
 ALERT_TYPES = {
     "ACCIDENT": {"emoji": "🚨", "title": "Accident"},
     "POLICE": {"emoji": "👮‍♂️", "title": "Police Presence"},
-    "JAM": {"emoji": "🚗🚗", "title": "Heavy Traffic Jam"},
+    "JAM": {"emoji": "🚗🚗", "title": "Traffic Jam"},
     "WEATHERHAZARD": {"emoji": "⚠️", "title": "Weather Hazard"},
     "HAZARD": {"emoji": "⚠️", "title": "Road Hazard"},
     "ROAD_CLOSED": {"emoji": "⛔", "title": "Road Closed"}
@@ -51,30 +49,31 @@ def send_telegram_alert(text):
         print(f"[Telegram Error]: {e}")
 
 def check_waze():
-    # TEST INITIAL: Trimite o confirmare imediat ce botul repornește
-    if "first_boot_test" not in seen_incidents:
-        send_telegram_alert("🟢 **Dublin Waze Bot is LIVE!**\nSystem connected successfully and scanning for incidents.")
-        seen_incidents.add("first_boot_test")
-
+    # Antete complete pentru a evita blocajele Cloudflare / Waze pe servere cloud
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.waze.com/live-map/",
+        "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
     }
 
     try:
         response = requests.get(WAZE_URL, headers=headers, timeout=10)
+        
         if response.status_code != 200:
-            print(f"[{time.strftime('%H:%M:%S')}] Waze Status Code: {response.status_code}")
+            print(f"[{time.strftime('%H:%M:%S')}] Waze Error {response.status_code}: Access Blocked or Server Error")
             return
 
         data = response.json()
         alerts = data.get("alerts", [])
+        jams = data.get("jams", [])
 
-        print(f"[{time.strftime('%H:%M:%S')}] Waze Check OK: {len(alerts)} alerts found in Dublin.")
+        print(f"[{time.strftime('%H:%M:%S')}] Success: Found {len(alerts)} alerts and {len(jams)} jams in Dublin.")
 
+        # Procesăm alertele
         for alert in alerts:
             uuid = alert.get("uuid")
 
@@ -101,7 +100,7 @@ def check_waze():
                 seen_incidents.add(uuid)
 
     except Exception as e:
-        print(f"[{time.strftime('%H:%M:%S')}] Error: {e}")
+        print(f"[{time.strftime('%H:%M:%S')}] Exception: {e}")
 
 def waze_loop():
     while True:
