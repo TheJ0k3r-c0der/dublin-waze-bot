@@ -1,20 +1,32 @@
+import os
+import threading
 import time
 import requests
+from flask import Flask
 
-# 1. Telegram Credentials
+# 1. Dummy Web Server to satisfy Render Web Service checks
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Dublin Waze Bot is running 24/7!"
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+# 2. Telegram Credentials
 BOT_TOKEN = "8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c"
 CHAT_ID = "-1004349956233"
 
-# 2. Waze Bounding Box Coordinates for Dublin Metropolitan Area
+# 3. Waze Bounding Box Coordinates for Dublin
 WAZE_URL = (
     "https://www.waze.com/live-map/api/georss"
     "?top=53.45&bottom=53.20&left=-6.45&right=-6.05"
     "&env=row&types=alerts"
 )
 
-# Temporary memory to avoid duplicate alerts
 seen_incidents = set()
-
 
 def send_telegram_alert(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -32,7 +44,6 @@ def send_telegram_alert(text):
             print(f"[Telegram Error] Status {response.status_code}: {response.text}")
     except Exception as e:
         print(f"[Telegram Network Error]: {e}")
-
 
 def check_waze():
     headers = {
@@ -55,7 +66,6 @@ def check_waze():
         print(f"[{time.strftime('%H:%M:%S')}] Fetched {len(alerts)} total alerts from Dublin area...")
 
         for alert in alerts:
-            # Filter only traffic accidents
             alert_type = alert.get("type")
             if alert_type == "ACCIDENT":
                 uuid = alert.get("uuid")
@@ -67,10 +77,8 @@ def check_waze():
                     lat = location.get("y")
                     lon = location.get("x")
 
-                    # Format the accident subtype description
                     clean_subtype = subtype.replace("_", " ").title() if subtype else "Traffic Accident"
 
-                    # Build the English message for Telegram
                     message = (
                         f"🚨 **{clean_subtype} in Dublin**\n\n"
                         f"📍 **Location:** {street}\n"
@@ -84,11 +92,16 @@ def check_waze():
     except Exception as e:
         print(f"[Waze Processing Error]: {e}")
 
+def waze_loop():
+    while True:
+        check_waze()
+        time.sleep(90)
 
 if __name__ == "__main__":
     print("=== Dublin Waze Traffic Bot Started ===")
-    print("Checking for new accidents every 90 seconds...\n")
     
-    while True:
-        check_waze()
-        time.sleep(90)  # Wait 1.5 minutes between checks
+    # Start Waze checking in a background thread
+    threading.Thread(target=waze_loop, daemon=True).start()
+    
+    # Start dummy web server on main thread for Render
+    run_web_server()
