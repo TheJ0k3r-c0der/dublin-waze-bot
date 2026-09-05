@@ -4,12 +4,12 @@ import time
 import requests
 from flask import Flask
 
-# 1. Dummy Web Server to satisfy Render Web Service checks
+# 1. Dummy Web Server for Render
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Dublin Waze Bot is running 24/7!"
+    return "Dublin Waze Multi-Alert Bot is running 24/7!"
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -27,6 +27,16 @@ WAZE_URL = (
 )
 
 seen_incidents = set()
+
+# Emoji-uri și titluri în funcție de tipul de alertă
+ALERT_TYPES = {
+    "ACCIDENT": {"emoji": "🚨", "title": "Accident"},
+    "POLICE": {"emoji": "👮‍♂️", "title": "Police Presence"},
+    "JAM": {"emoji": "🚗🚗", "title": "Heavy Traffic Jam"},
+    "WEATHERHAZARD": {"emoji": "⚠️", "title": "Weather Hazard / Road Hazard"},
+    "HAZARD": {"emoji": "⚠️", "title": "Road Hazard"},
+    "ROAD_CLOSED": {"emoji": "⛔", "title": "Road Closed"}
+}
 
 def send_telegram_alert(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -66,28 +76,36 @@ def check_waze():
         print(f"[{time.strftime('%H:%M:%S')}] Fetched {len(alerts)} total alerts from Dublin area...")
 
         for alert in alerts:
-            alert_type = alert.get("type")
-            if alert_type == "ACCIDENT":
-                uuid = alert.get("uuid")
+            uuid = alert.get("uuid")
 
-                if uuid not in seen_incidents:
-                    street = alert.get("street", "Unspecified Road")
-                    subtype = alert.get("subtype", "ACCIDENT")
-                    location = alert.get("location", {})
-                    lat = location.get("y")
-                    lon = location.get("x")
+            # Procesăm doar alertele noi
+            if uuid not in seen_incidents:
+                alert_type = alert.get("type", "HAZARD")
+                street = alert.get("street", "Unspecified Road")
+                subtype = alert.get("subtype", "")
+                location = alert.get("location", {})
+                lat = location.get("y")
+                lon = location.get("x")
 
-                    clean_subtype = subtype.replace("_", " ").title() if subtype else "Traffic Accident"
+                # Preluăm emoji-ul și titlul corespunzător
+                type_info = ALERT_TYPES.get(alert_type, {"emoji": "⚠️", "title": "Traffic Alert"})
+                emoji = type_info["emoji"]
+                
+                if subtype:
+                    clean_title = subtype.replace("_", " ").title()
+                else:
+                    clean_title = type_info["title"]
 
-                    message = (
-                        f"🚨 **{clean_subtype} in Dublin**\n\n"
-                        f"📍 **Location:** {street}\n"
-                        f"🗺️ [View on Google Maps](https://www.google.com/maps?q={lat},{lon})\n"
-                        f"🚗 [Open in Waze](https://waze.com/ul?ll={lat},{lon}&navigate=yes)"
-                    )
+                # Mesaj în engleză
+                message = (
+                    f"{emoji} **{clean_title} in Dublin**\n\n"
+                    f"📍 **Location:** {street}\n"
+                    f"🗺️ [View on Google Maps](https://www.google.com/maps?q={lat},{lon})\n"
+                    f"🚗 [Open in Waze](https://waze.com/ul?ll={lat},{lon}&navigate=yes)"
+                )
 
-                    send_telegram_alert(message)
-                    seen_incidents.add(uuid)
+                send_telegram_alert(message)
+                seen_incidents.add(uuid)
 
     except Exception as e:
         print(f"[Waze Processing Error]: {e}")
@@ -98,10 +116,10 @@ def waze_loop():
         time.sleep(90)
 
 if __name__ == "__main__":
-    print("=== Dublin Waze Traffic Bot Started ===")
+    print("=== Dublin Waze Multi-Alert Bot Started ===")
     
-    # Start Waze checking in a background thread
+    # Start Waze checking in background
     threading.Thread(target=waze_loop, daemon=True).start()
     
-    # Start dummy web server on main thread for Render
+    # Start web server for Render
     run_web_server()
