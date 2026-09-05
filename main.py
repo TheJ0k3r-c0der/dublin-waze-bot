@@ -89,9 +89,18 @@ def escape_html(value: Any) -> str:
     )
 
 
-def extract_waze_payload(data: dict[str, Any]) -> dict[str, Any]:
-    """Încearcă să extragă JSON-ul Waze din răspunsul ScrapingAnt."""
-    raw_content = data.get("content", "")
+def extract_waze_payload(raw_response: str) -> dict[str, Any]:
+    """Încearcă să extragă JSON-ul Waze din răspunsul ScrapingAnt v2."""
+    try:
+        parsed_response = json.loads(raw_response)
+    except json.JSONDecodeError:
+        return {}
+
+    if not isinstance(parsed_response, dict):
+        return {}
+
+    # Unele versiuni/planuri pot returna JSON-ul Waze în câmpul content.
+    raw_content = parsed_response.get("content", "")
 
     if isinstance(raw_content, dict):
         return raw_content
@@ -104,7 +113,8 @@ def extract_waze_payload(data: dict[str, Any]) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
-    return data
+    # În răspunsul direct, obiectul JSON conține chiar câmpul alerts.
+    return parsed_response
 
 
 def build_accident_message(alert: dict[str, Any]) -> str:
@@ -141,22 +151,35 @@ def build_accident_message(alert: dict[str, Any]) -> str:
 def check_waze() -> None:
     print("[WAZE JOB] Se preiau alertele...", flush=True)
 
-    params = {
-        "api_key": SCRAPINGANT_API_KEY,
-        "url": WAZE_URL,
-        "browser_scanner": "true",
-    }
+    # ScrapingAnt v2 cere cheia în parametrul x-api-key. Parametrul vechi
+    # api_key, împreună cu browser_scanner, poate provoca HTTP 422.
+    params = {"url": WAZE_URL}
+    headers = {"x-api-key": SCRAPINGANT_API_KEY}
 
     try:
         response = requests.get(
             SCRAPINGANT_ENDPOINT,
             params=params,
+            headers=headers,
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
-        response.raise_for_status()
 
-        data = response.json()
-        waze_data = extract_waze_payload(data)
+        if response.status_code != 200:
+            detail = response.text[:500].replace("\n", " ")
+            print(
+                f"[WAZE JOB] ScrapingAnt HTTP {response.status_code}: {detail}",
+                flush=True,
+            )
+            return
+
+        waze_data = extract_waze_payload(response.text)
+        if not waze_data:
+            print(
+                "[WAZE JOB] Răspunsul ScrapingAnt nu conține JSON Waze valid.",
+                flush=True,
+            )
+            return
+
         alerts = waze_data.get("alerts", [])
 
         if not isinstance(alerts, list):
