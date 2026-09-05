@@ -1,5 +1,4 @@
 import os
-import time
 import requests
 from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -8,6 +7,12 @@ app = Flask(__name__)
 
 BOT_TOKEN = "8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c"
 CHAT_ID = "-1004349956233"
+
+# Pune AICI cheia ta de la ScrapingAnt
+SCRAPINGANT_API_KEY = "PUNE_AICI_API_KEY_DE_LA_SCRAPINGANT"
+
+WAZE_URL = "https://www.waze.com/live-map/api/georss?top=53.45&bottom=53.20&left=-6.45&right=-6.05&env=row&types=alerts"
+PROXY_ENDPOINT = f"https://api.scrapingant.com/v2/general?api_key={SCRAPINGANT_API_KEY}&url={requests.utils.quote(WAZE_URL)}&proxy_type=residential"
 
 seen_incidents = set()
 
@@ -25,26 +30,10 @@ def send_telegram_alert(text):
         print(f"[Telegram Error]: {e}", flush=True)
 
 def check_waze():
-    print("[WAZE JOB] Querying Mobile GeoRSS Feed...", flush=True)
-
-    # Adăugăm un timestamp dinamic pentru a invalida verificările statice Cloudflare
-    timestamp = int(time.time() * 1000)
-    
-    url = (
-        "https://www.waze.com/row-rtserver/web/TGeoRSS"
-        f"?top=53.45&bottom=53.20&left=-6.45&right=-6.05&env=row&types=alerts&_={timestamp}"
-    )
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Accept-Language": "en-US,en;q=0.5",
-        "X-Requested-With": "XMLHttpRequest",
-        "Referer": "https://www.waze.com/live-map",
-    }
+    print("[WAZE JOB] Fetching via Residential Proxy...", flush=True)
 
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(PROXY_ENDPOINT, timeout=20)
 
         if response.status_code != 200:
             print(f"[WAZE JOB] Status Error: HTTP {response.status_code}", flush=True)
@@ -89,8 +78,9 @@ def check_waze():
     except Exception as e:
         print(f"[WAZE JOB] Exception: {e}", flush=True)
 
+# Schimbăm la 3 minute pentru a încadra cererile în limita gratuită lunară
 scheduler = BackgroundScheduler(daemon=True)
-scheduler.add_job(check_waze, 'interval', seconds=60)
+scheduler.add_job(check_waze, 'interval', minutes=3)
 scheduler.start()
 
 @app.route("/")
