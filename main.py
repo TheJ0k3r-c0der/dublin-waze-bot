@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -7,19 +8,6 @@ app = Flask(__name__)
 
 BOT_TOKEN = "8744802014:AAGkTNyb4RC_LfG0grxr2j01BsJ8xkCtg2c"
 CHAT_ID = "-1004349956233"
-
-# Endpoint-ul oficial GeoRSS al Waze LiveMap
-WAZE_URL = "https://www.waze.com/live-map/api/georss"
-
-# Parametrii exacti pe care îi trimite harta oficială Waze Web pentru Dublin
-PARAMS = {
-    "top": "53.45",
-    "bottom": "53.20",
-    "left": "-6.45",
-    "right": "-6.05",
-    "env": "row",
-    "types": "alerts"
-}
 
 seen_incidents = set()
 
@@ -37,35 +25,34 @@ def send_telegram_alert(text):
         print(f"[Telegram Error]: {e}", flush=True)
 
 def check_waze():
-    print("[WAZE JOB] Fetching Waze data...", flush=True)
+    print("[WAZE JOB] Querying Mobile GeoRSS Feed...", flush=True)
 
-    # Identitate completă de browser desktop pentru a evita blocajele Cloudflare
+    # Adăugăm un timestamp dinamic pentru a invalida verificările statice Cloudflare
+    timestamp = int(time.time() * 1000)
+    
+    url = (
+        "https://www.waze.com/row-rtserver/web/TGeoRSS"
+        f"?top=53.45&bottom=53.20&left=-6.45&right=-6.05&env=row&types=alerts&_={timestamp}"
+    )
+
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.waze.com/live-map/",
-        "Origin": "https://www.waze.com",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Language": "en-US,en;q=0.5",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": "https://www.waze.com/live-map",
     }
 
     try:
-        response = requests.get(WAZE_URL, params=PARAMS, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=10)
 
         if response.status_code != 200:
             print(f"[WAZE JOB] Status Error: HTTP {response.status_code}", flush=True)
             return
 
-        try:
-            data = response.json()
-        except Exception:
-            print("[WAZE JOB] Response was not JSON (blocked by Cloudflare).", flush=True)
-            return
-
+        data = response.json()
         alerts = data.get("alerts", [])
-        print(f"[WAZE JOB] SUCCESS! Found {len(alerts)} alerts in Dublin area.", flush=True)
+        print(f"[WAZE JOB] SUCCESS! Received {len(alerts)} alerts in Dublin.", flush=True)
 
         for alert in alerts:
             uuid = alert.get("uuid") or alert.get("id")
